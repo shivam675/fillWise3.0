@@ -1,0 +1,45 @@
+{
+  "name": "general-legal-style",
+  "description": "Sample FillWise ruleset for local testing",
+  "version": "1.0.0",
+  "jurisdiction": "UAE",
+  "schema_version": "1.0",
+  "rules": [
+    {
+      "id": "plain-language-clauses",
+      "name": "Plain language for clauses",
+      "description": "Improve readability while preserving legal meaning.",
+      "scope": ["clause"],
+      "conditions": ["Applies to all contractual clauses"],
+      "prompt_fragment": "Rewrite the clause in plain legal language while preserving legal obligations, rights, party names, dates, and numeric values exactly.",
+      "priority": 90
+    },
+    {
+      "id": "defined-term-consistency",
+      "name": "Keep defined terms consistent",
+      "description": "Preserve exact capitalization and wording of defined terms.",
+      "scope": ["definition", "clause"],
+      "conditions": ["When defined terms are present"],
+      "prompt_fragment": "Do not rename, re-capitalize, or alter any defined term; keep each defined term exactly as used in the original text.",
+      "priority": 95
+    },
+    {
+      "id": "heading-clarity",
+      "name": "Clarify headings",
+      "description": "Make headings concise and clear without changing intent.",
+      "scope": ["heading"],
+      "conditions": ["For section headings"],
+      "prompt_fragment": "Improve heading clarity and brevity while preserving legal intent and section meaning.",
+      "priority": 70
+    },
+    {
+      "id": "no-new-obligations",
+      "name": "No new obligations",
+      "description": "Prevent legal drift by disallowing new duties.",
+      "scope": ["clause", "definition", "preamble", "appendix"],
+      "conditions": ["Always"],
+      "prompt_fragment": "Do not add any new legal obligation, duty, warranty, indemnity, or liability that is not explicitly present in the source text.",
+      "priority": 100
+    }
+  ]
+}

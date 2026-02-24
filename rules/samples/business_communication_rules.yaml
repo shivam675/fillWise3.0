@@ -1,0 +1,59 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FillWise 3.0  ·  Business Communication Enhancement Rules  
+# ─────────────────────────────────────────────────────────────────────────────
+# Purpose  : Improve business documents and professional communication
+# Scope    : Business writing enhancement
+# Version  : 1.0.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema_version: "1.0"
+name: business_communication_rules
+version: "1.0.0"
+description: >
+  Rules designed to enhance business documents, emails, reports, and
+  professional communications. Focus on clarity, professionalism,
+  and effective business messaging.
+jurisdiction: Universal
+
+rules:
+  - id: professional-tone
+    name: Maintain professional and courteous tone
+    instruction: >
+      Ensure all communication maintains a professional, respectful tone.
+      Replace casual language with business-appropriate alternatives.
+      Use courteous phrases and acknowledge the reader's time and perspective.
+
+  - id: action-oriented-language
+    name: Use action-oriented and results-focused language
+    instruction: >
+      Focus on outcomes, actions, and concrete results.
+      Use strong action verbs and specific language.
+      Replace vague phrases with concrete, measurable statements.
+
+  - id: business-structure
+    name: Structure information for business readers
+    instruction: >
+      Lead with key points and main conclusions.
+      Use bullet points and headers to organize information clearly.
+      Structure content so busy executives can quickly understand main points.
+
+  - id: eliminate-business-jargon
+    name: Replace business jargon with clear language
+    instruction: >
+      Replace buzzwords, corporate speak, and meaningless jargon with specific language.
+      Avoid phrases like "synergize," "leverage," "paradigm shift" unless genuinely necessary.
+      Use concrete, specific terms that clearly convey meaning.
+
+  - id: concise-business-writing
+    name: Make business writing concise and focused
+    instruction: >
+      Eliminate unnecessary words and get straight to the point.
+      Respect the reader's time by being direct and efficient.
+      Combine redundant points and remove filler content.
+
+  - id: professional-formatting
+    name: Ensure professional formatting and presentation
+    instruction: >
+      Use consistent formatting, proper capitalization, and business-standard punctuation.
+      Organize content with appropriate headings and white space.
+      Ensure the document looks polished and professional.

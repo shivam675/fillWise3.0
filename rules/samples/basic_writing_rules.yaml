@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FillWise 3.0  ·  Basic Writing Improvement Rules
+# ─────────────────────────────────────────────────────────────────────────────
+# Purpose  : Improve clarity, readability, and professionalism of any text
+# Scope    : Universal writing improvements
+# Version  : 1.0.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema_version: "1.0"
+name: basic_writing_rules
+version: "1.0.0"
+description: >
+  Universal writing improvement rules that make any text clearer,
+  more professional, and easier to understand.
+jurisdiction: Universal
+
+rules:
+  - id: clear-language
+    name: Use clear and simple language
+    instruction: >
+      Rewrite complex or confusing sentences to be clear and direct.
+      Replace jargon, technical terms, and unnecessarily complex words with simpler alternatives.
+      Break long sentences into shorter, more digestible ones.
+
+  - id: active-voice
+    name: Prefer active voice over passive voice
+    instruction: >
+      Convert passive voice constructions to active voice where it improves clarity.
+      Make it clear who is performing each action.
+      Example: Change "Mistakes were made" to "We made mistakes."
+
+  - id: fix-grammar
+    name: Correct grammar and spelling errors
+    instruction: >
+      Fix all grammatical errors, spelling mistakes, and punctuation issues.
+      Ensure proper sentence structure and word usage.
+      Use consistent capitalization and formatting throughout.
+
+  - id: remove-wordiness
+    name: Eliminate unnecessary words and repetition
+    instruction: >
+      Remove redundant phrases, filler words, and unnecessary repetition.
+      Make every word serve a purpose.
+      Combine similar ideas and eliminate verbose expressions.
+
+  - id: improve-flow
+    name: Improve text structure and flow
+    instruction: >
+      Organize information in a logical sequence.
+      Use appropriate transitions between ideas.
+      Ensure each paragraph has a clear purpose and flows smoothly to the next.
+
+  - id: consistent-style
+    name: Maintain consistent style and tone
+    instruction: >
+      Use consistent terminology, tense, and writing style throughout.
+      Maintain an appropriate tone for the intended audience.
+      Ensure uniform formatting and presentation.

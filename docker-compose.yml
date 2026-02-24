@@ -1,0 +1,148 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FillWise 3.0  ·  Docker Compose
+#
+# Default profile  : SQLite backend + Nginx frontend (lightweight local dev)
+# "postgres" profile: PostgreSQL replaces SQLite
+# "ollama" profile  : Containerised Ollama (GPU-optional)
+#
+# Usage:
+#   make up                         # SQLite mode
+#   make up PROFILE=postgres        # PostgreSQL mode
+#   make up PROFILE="postgres ollama" # PostgreSQL + containerised Ollama
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+x-backend-env: &backend-env
+  env_file:
+    - .env
+
+# ─── Services ─────────────────────────────────────────────────────────────────
+services:
+
+  # ── Backend (FastAPI) ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    image: fillwise-backend:3.0
+    container_name: fillwise-backend
+    restart: unless-stopped
+    <<: *backend-env
+    environment:
+      # Override DATABASE_URL when postgres profile is active.
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////data/fillwise.db}
+      UPLOAD_DIR: /data/uploads
+      EXPORT_DIR: /data/exports
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - fillwise-data:/data
+      - ./rules:/app/rules:ro          # mount sample/custom rule YAML files
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false               # only required if postgres profile active
+    networks:
+      - fillwise-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── Frontend (React, served by Nginx) ────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: fillwise-frontend:3.0
+    container_name: fillwise-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: http://backend:8000
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - backend
+    networks:
+      - fillwise-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ── PostgreSQL (optional — activate with --profile postgres) ─────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: fillwise-postgres
+    restart: unless-stopped
+    profiles:
+      - postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fillwise}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fillwise_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-fillwise}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - fillwise-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fillwise} -d ${POSTGRES_DB:-fillwise}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - fillwise-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Ollama (optional — activate with --profile ollama) ───────────────────────
+  # Requires NVIDIA runtime for GPU acceleration.
+  # CPU-only mode also works but is slower.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: fillwise-ollama
+    restart: unless-stopped
+    profiles:
+      - ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - fillwise-ollama:/root/.ollama
+    # Uncomment the deploy block to enable GPU access (Docker Desktop + NVIDIA):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    networks:
+      - fillwise-net
+
+# ─── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  fillwise-data:
+    driver: local
+  fillwise-postgres:
+    driver: local
+  fillwise-ollama:
+    driver: local
+
+# ─── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  fillwise-net:
+    driver: bridge

@@ -1,0 +1,59 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FillWise 3.0  ·  Legal Document Enhancement Rules
+# ─────────────────────────────────────────────────────────────────────────────
+# Purpose  : Improve legal documents for better clarity and comprehension
+# Scope    : Legal document refinement
+# Version  : 1.0.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema_version: "1.0"
+name: legal_document_rules
+version: "1.0.0"
+description: >
+  Rules specifically designed to improve legal documents while maintaining
+  legal accuracy and precision. Focus on making legal text more accessible
+  without compromising its legal effectiveness.
+jurisdiction: Universal
+
+rules:
+  - id: plain-legal-language
+    name: Use plain legal language
+    instruction: >
+      Replace archaic legal terms and Latin phrases with modern, clear alternatives.
+      Explain technical legal concepts in simpler terms when possible.
+      Maintain legal precision while improving readability for non-lawyers.
+
+  - id: structure-legal-paragraphs
+    name: Structure paragraphs for legal clarity
+    instruction: >
+      Organize legal provisions into clear, numbered sections.
+      Use bullet points or lists for multiple conditions or requirements.
+      Ensure each paragraph addresses one main legal concept or obligation.
+
+  - id: define-terms-clearly
+    name: Define terms clearly and consistently
+    instruction: >
+      Ensure all important terms are clearly defined when first introduced.
+      Use defined terms consistently throughout the document.
+      Avoid using the same word to mean different things in different contexts.
+
+  - id: modernize-legal-language
+    name: Modernize outdated legal language
+    instruction: >
+      Replace "whereas," "heretofore," "aforementioned," and similar archaic terms
+      with modern equivalents. Use "this agreement" instead of "said agreement."
+      Maintain formality while improving accessibility.
+
+  - id: clarify-obligations
+    name: Clearly state rights and obligations
+    instruction: >
+      Make it crystal clear who must do what, when, and under what circumstances.
+      Use "must" for obligations, "may" for permissions, and "will" for future actions.
+      Avoid ambiguous words like "should" or "ought to" in legal obligations.
+
+  - id: improve-legal-flow
+    name: Improve logical flow between clauses
+    instruction: >
+      Ensure smooth transitions between related legal provisions.
+      Group related clauses together logically.
+      Use clear headings and subheadings to organize complex legal content.
