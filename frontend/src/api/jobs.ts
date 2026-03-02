@@ -26,6 +26,13 @@ export const jobsApi = {
   assemble: (id: string) =>
     http.post(`/jobs/${id}/assemble`).then((r) => r.data),
 
+  cancel: (id: string) =>
+    http.post(`/jobs/${id}/cancel`).then((r) => r.data),
+
+  /** Delete a rewrite job and all associated data. */
+  delete: (id: string) =>
+    http.delete(`/jobs/${id}`).then(() => void 0),
+
   /** Download the assembled DOCX export. Uses blob response type for file download. */
   downloadExport: (documentId: string, jobId: string) =>
     http

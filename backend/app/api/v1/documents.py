@@ -39,15 +39,22 @@ async def _run_ingestion(document_id: str) -> None:
     """Background task wrapper for document processing."""
     from app.db.session import get_session_factory
 
-    factory = get_session_factory()
-    async with factory() as db:
-        processor = DocumentProcessor(db)
-        try:
-            await processor.process(document_id)
-            await db.commit()
-        except Exception as exc:
-            await db.rollback()
-            _log.error("background_ingestion_failed", document_id=document_id, error=str(exc))
+    try:
+        factory = get_session_factory()
+        async with factory() as db:
+            processor = DocumentProcessor(db)
+            try:
+                await processor.process(document_id)
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                _log.error("background_ingestion_failed", document_id=document_id, error=str(exc))
+    except Exception as outer_exc:
+        _log.error(
+            "ingestion_session_failed",
+            document_id=document_id,
+            error=str(outer_exc),
+        )
 
 
 @router.post(
@@ -282,19 +289,27 @@ async def get_document_graph(
 )
 async def export_document(
     document_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
     job_id: str = Query(..., description="Job ID whose assembled output to download"),
-    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ) -> FileResponse:
     """Download the assembled DOCX for an approved job."""
-    from app.config.settings import get_settings
     from app.db.models.job import RewriteJob
 
+    settings = get_settings()
     job = await db.get(RewriteJob, job_id)
     if job is None or job.document_id != document_id:
         raise NotFoundError("RewriteJob", job_id)
 
-    settings = get_settings()
-    # Find most recent export for this job
+    # Use persisted export_filename when available; fall back to glob search
+    if job.export_filename:
+        export_path = settings.export_dir / job.export_filename
+        if export_path.exists():
+            return FileResponse(
+                path=str(export_path),
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                filename=f"fillwise_export_{job_id[:8]}.docx",
+            )
+
     candidates = list(settings.export_dir.glob(f"{job_id}_*.docx"))
     if not candidates:
         raise NotFoundError("Export file for job", job_id)

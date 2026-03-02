@@ -218,6 +218,20 @@ class Settings(BaseSettings):
         description="Ollama sampling temperature for rewrites (lower = more deterministic)",
     )
 
+    # ── WebSocket ──────────────────────────────────────────────────────── #
+    ws_ticket_expire_seconds: int = Field(
+        default=30,
+        ge=10,
+        le=300,
+        description="TTL for WebSocket auth tickets in seconds",
+    )
+    rewrite_max_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Maximum LLM call attempts per section before marking FAILED",
+    )
+
     # ── CSRF ───────────────────────────────────────────────────────────── #
     csrf_cookie_name: str = Field(default="fillwise_csrf", description="CSRF cookie name")
     csrf_header_name: str = Field(default="X-CSRF-Token", description="CSRF header name")

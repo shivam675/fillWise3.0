@@ -15,8 +15,10 @@ from app.core.errors import AuthError, ErrorCode
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    create_ws_ticket,
     decode_token,
     generate_csrf_token,
+    hash_password,
     verify_password,
 )
 from app.db.models.user import User
@@ -97,11 +99,9 @@ async def refresh_token(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
     """Exchange a valid refresh token for a new access token."""
-    from jose import JWTError
-
     try:
         payload = decode_token(body.refresh_token)
-    except JWTError as exc:
+    except Exception as exc:
         raise AuthError(ErrorCode.AUTH_TOKEN_INVALID, "Refresh token invalid") from exc
 
     if payload.get("type") != "refresh":
@@ -140,8 +140,6 @@ async def change_password(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """Change the authenticated user's password."""
-    from app.core.security import hash_password
-
     if not verify_password(body.current_password, current_user.password_hash):
         raise AuthError(ErrorCode.AUTH_INVALID_CREDENTIALS, "Current password is incorrect")
 
@@ -155,3 +153,17 @@ async def change_password(
         entity_id=current_user.id,
     )
     await db.commit()
+
+
+@router.post("/ws-ticket", summary="Obtain a short-lived WebSocket auth ticket")
+async def get_ws_ticket(current_user: CurrentUser) -> dict[str, str]:
+    """
+    Issue a short-lived ticket for WebSocket authentication.
+
+    The ticket should be passed as ``?ticket=...`` when connecting to
+    a WebSocket endpoint.  It expires after a few seconds and is
+    intended for single use, avoiding long-lived JWTs in query strings.
+    """
+    # Role is already eager-loaded by the CurrentUser dependency
+    ticket = create_ws_ticket(user_id=current_user.id, role=current_user.role.name)
+    return {"ticket": ticket}

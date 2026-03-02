@@ -25,7 +25,15 @@ from app.db.models.audit import AuditEvent
 
 _log = structlog.get_logger(__name__)
 
-_LOCK = asyncio.Lock()
+_LOCK: asyncio.Lock | None = None
+
+
+def _get_lock() -> asyncio.Lock:
+    """Lazily create the asyncio lock to avoid binding to a specific event loop at import time."""
+    global _LOCK  # noqa: PLW0603
+    if _LOCK is None:
+        _LOCK = asyncio.Lock()
+    return _LOCK
 
 
 def _compute_event_hash(
@@ -85,7 +93,7 @@ class AuditLogger:
         The lock ensures prev_hash is read and written atomically even
         under concurrent requests, preserving chain integrity.
         """
-        async with _LOCK:
+        async with _get_lock():
             prev_hash = await self._get_last_hash()
             created_at = datetime.now(UTC)
             payload_json = json.dumps(payload, sort_keys=True) if payload else None
@@ -142,13 +150,13 @@ class AuditLogger:
             (True, None) if chain is intact.
             (False, event_id) of the first event where the chain is broken.
         """
-        result = await db.execute(
+        # Stream results to avoid loading entire audit history into memory
+        result = await db.stream(
             select(AuditEvent).order_by(AuditEvent.created_at.asc())
         )
-        events: list[AuditEvent] = list(result.scalars().all())
 
         prev_hash: str | None = None
-        for event in events:
+        async for event in result.scalars():
             expected = _compute_event_hash(
                 event_type=event.event_type,
                 actor_id=event.actor_id,

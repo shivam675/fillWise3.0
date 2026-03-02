@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, Zap, Check } from "lucide-react";
+import { ArrowLeft, Download, Zap, Check, Trash2, Square } from "lucide-react";
 import { jobsApi } from "@/api/jobs";
+import { http } from "@/api/client";
 import StatusBadge from "@/components/ui/StatusBadge";
 import Spinner from "@/components/ui/Spinner";
 import { formatDate } from "@/lib/utils";
@@ -76,71 +77,100 @@ export default function JobDetailPage() {
     },
   });
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const deleteMut = useMutation({
+    mutationFn: () => jobsApi.delete(id!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      navigate("/jobs", { replace: true });
+    },
+    onError: (err) => setAssembleError(extractErrorMessage(err)),
+  });
+
+  const cancelMut = useMutation({
+    mutationFn: () => jobsApi.cancel(id!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs", id] });
+    },
+    onError: (err) => setAssembleError(extractErrorMessage(err)),
+  });
+
   // Connect WebSocket when job is pending or running to drive execution
   // and receive live token streaming
-  useEffect(() => {
-    const status = job?.status;
-    if (!id || !accessToken || (status !== "pending" && status !== "running")) return;
+    const shouldConnect = job?.status === "pending" || job?.status === "running";
+
+    useEffect(() => {
+      if (!id || !accessToken || !shouldConnect) return;
     if (wsRef.current) return;
 
-    setWsStatus("live");
-    setStreamLines([]);
-    currentSectionRef.current = null;
-    const ws = new WebSocket(
-      `${WS_BASE}/api/v1/ws/jobs/${id}?token=${accessToken}`
-    );
-    wsRef.current = ws;
+    let cancelled = false;
 
-    ws.onmessage = (e) => {
-      const update: JobProgressUpdate = JSON.parse(e.data);
+    // Obtain a short-lived WS ticket then connect
+    (async () => {
+      try {
+        const { data } = await http.post<{ ticket: string }>("/auth/ws-ticket");
+        if (cancelled) return;
 
-      // Track progress counts from the orchestrator
-      if (update.total_sections > 0) {
-        setLiveProgress({ completed: update.completed_sections, total: update.total_sections });
-      }
+        setWsStatus("live");
+        setStreamLines([]);
+        currentSectionRef.current = null;
+        const ws = new WebSocket(
+          `${WS_BASE}/api/v1/ws/jobs/${id}?ticket=${data.ticket}`
+        );
+        wsRef.current = ws;
 
-      // When a new section starts, push a separator line
-      if (update.section_id && update.section_id !== currentSectionRef.current && update.status === "running" && !update.token) {
-        currentSectionRef.current = update.section_id;
-        setStreamLines((prev) => [
-          ...prev,
-          `\n── Page ${(update.completed_sections || 0) + 1} of ${update.total_sections || "?"} ──`,
-          "",
-        ]);
-      }
+        ws.onmessage = (e) => {
+          const update: JobProgressUpdate = JSON.parse(e.data);
 
-      if (update.token) {
-        setStreamLines((prev) => {
-          const last = prev[prev.length - 1] ?? "";
-          return [...prev.slice(0, -1), last + update.token];
-        });
+          // Track progress counts from the orchestrator
+          if (update.total_sections > 0) {
+            setLiveProgress({ completed: update.completed_sections, total: update.total_sections });
+          }
+
+          // When a new section starts, push a separator line
+          if (update.section_id && update.section_id !== currentSectionRef.current && update.status === "running" && !update.token) {
+            currentSectionRef.current = update.section_id;
+            setStreamLines((prev) => [
+              ...prev,
+              `\n── Page ${(update.completed_sections || 0) + 1} of ${update.total_sections || "?"} ──`,
+              "",
+            ]);
+          }
+
+          if (update.token) {
+            setStreamLines((prev) => {
+              const last = prev[prev.length - 1] ?? "";
+              return [...prev.slice(0, -1), last + update.token];
+            });
+          }
+          if (update.done) {
+            setWsStatus("done");
+            setLiveProgress(null);
+            qc.invalidateQueries({ queryKey: ["jobs", id] });
+            ws.close();
+          }
+        };
+        ws.onerror = () => setWsStatus("error");
+        ws.onclose = () => {
+          wsRef.current = null;
+          if (wsStatus === "live") setWsStatus("done");
+        };
+      } catch {
+        setWsStatus("error");
       }
-      if (update.done) {
-        setWsStatus("done");
-        setLiveProgress(null);
-        qc.invalidateQueries({ queryKey: ["jobs", id] });
-        ws.close();
-      }
-    };
-    ws.onerror = () => setWsStatus("error");
-    ws.onclose = () => {
-      wsRef.current = null;
-      if (wsStatus === "live") setWsStatus("done");
-    };
+    })();
 
     return () => {
-      ws.close();
-      wsRef.current = null;
+      cancelled = true;
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, accessToken, job?.status]);
+    }, [id, accessToken, shouldConnect]);
 
-  useEffect(() => {
-    streamEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [streamLines]);
-
-  if (isLoading) return <div className="flex justify-center py-20"><Spinner /></div>;
-  if (!job) return <p className="text-gray-500">Job not found.</p>;
+  if (isLoading || !job) return <Spinner />;
 
   const completed = liveProgress?.completed ?? job.completed_sections;
   const total = liveProgress?.total ?? job.total_sections;
@@ -181,6 +211,27 @@ export default function JobDetailPage() {
                 : assembleSuccess
                   ? "Downloaded!"
                   : "Assemble DOCX"}
+            </button>
+          )}
+          {(job.status === "running" || job.status === "pending") && (
+            <button
+              className="btn-secondary text-amber-600 hover:text-amber-700"
+              onClick={() => cancelMut.mutate()}
+              disabled={cancelMut.isPending}
+              title="Stop job"
+            >
+              <Square className="h-4 w-4" />
+              {cancelMut.isPending ? "Stopping…" : "Stop"}
+            </button>
+          )}
+          {job.status !== "running" && job.status !== "pending" && (
+            <button
+              className="btn-secondary text-red-600 hover:text-red-700"
+              onClick={() => setShowDeleteConfirm(true)}
+              title="Delete job"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
             </button>
           )}
         </div>
@@ -240,6 +291,35 @@ export default function JobDetailPage() {
             {rewrites.map((rw) => (
               <RewriteRow key={rw.id} rewrite={rw} />
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="card w-full max-w-sm space-y-4">
+            <h2 className="font-semibold text-gray-900">Delete Job</h2>
+            <p className="text-sm text-gray-600">
+              This will permanently delete the job, all rewrites, risk findings,
+              reviews, and comments. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleteMut.isPending}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary bg-red-600 hover:bg-red-700"
+                onClick={() => deleteMut.mutate()}
+                disabled={deleteMut.isPending}
+              >
+                {deleteMut.isPending ? "Deleting…" : "Delete"}
+              </button>
+            </div>
           </div>
         </div>
       )}

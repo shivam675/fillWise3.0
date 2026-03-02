@@ -38,8 +38,12 @@ RULE_SCHEMA: dict[str, Any] = {
             "minItems": 1,
             "items": {
                 "type": "object",
-                "required": ["id", "name", "instruction"],
+                "required": ["id", "name"],
                 "additionalProperties": False,
+                "anyOf": [
+                    {"required": ["instruction"]},
+                    {"required": ["prompt_fragment"]},
+                ],
                 "properties": {
                     "id": {
                         "type": "string",
@@ -48,6 +52,14 @@ RULE_SCHEMA: dict[str, Any] = {
                     },
                     "name": {"type": "string", "maxLength": 255},
                     "instruction": {"type": "string", "minLength": 10},
+                    "description": {"type": "string", "maxLength": 2000},
+                    "prompt_fragment": {"type": "string", "minLength": 10},
+                    "scope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "conditions": {"type": "object"},
+                    "priority": {"type": "integer", "minimum": 0},
                 },
             },
         },
@@ -124,14 +136,14 @@ def detect_rule_conflicts(rules: list[dict[str, Any]]) -> list[dict[str, str]]:
     for rule in rules:
         scope: frozenset[str] = frozenset(rule.get("scope", []))
         rule_id: str = rule["id"]
-        prompt: str = rule.get("prompt_fragment", "").lower()
+        prompt: str = (rule.get("prompt_fragment") or rule.get("instruction") or "").lower()
 
         for prev_scope_key, prev_rule_id in seen.items():
             if not scope.isdisjoint(prev_scope_key):
                 prev_rule = next((r for r in rules if r["id"] == prev_rule_id), None)
                 if prev_rule is None:
                     continue
-                prev_prompt = prev_rule.get("prompt_fragment", "").lower()
+                prev_prompt = (prev_rule.get("prompt_fragment") or prev_rule.get("instruction") or "").lower()
 
                 for pos_words, neg_words in _NEGATION_PAIRS:
                     curr_pos = any(w in prompt for w in pos_words)

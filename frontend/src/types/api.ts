@@ -217,6 +217,7 @@ export interface ReviewCommentOut {
 export interface ReviewOut {
   id: string;
   rewrite_id: string;
+  job_id: string | null;
   reviewer_id: string;
   status: ReviewStatus;
   edited_text: string | null;

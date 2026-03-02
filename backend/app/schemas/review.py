@@ -7,18 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.db.models.review import ReviewStatus
-
-
-class RiskFindingOut(BaseModel):
-    id: str
-    severity: str  # CRITICAL | HIGH | MEDIUM | LOW | INFO
-    category: str
-    description: str
-    score: float
-    detail_json: dict | None
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
+from app.schemas.job import RiskFindingOut
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -68,6 +57,7 @@ class DiffHunk(BaseModel):
 class ReviewOut(BaseModel):
     id: str
     rewrite_id: str
+    job_id: str | None = None
     reviewer_id: str
     status: ReviewStatus
     edited_text: str | None

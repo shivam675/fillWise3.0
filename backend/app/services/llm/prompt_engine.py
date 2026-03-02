@@ -106,6 +106,90 @@ def _strip_trailing_metadata(text: str, audit: dict[str, Any]) -> str:
 
     return text
 
+# ── Markdown stripper (post-processing safety net) ───────────────────── #
+
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_MD_BOLD_ITALIC_RE = re.compile(r"\*{3}(.+?)\*{3}")       # ***text***
+_MD_BOLD_RE = re.compile(r"\*{2}(.+?)\*{2}")              # **text**
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")  # *text*
+_MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")              # `code`
+_MD_FENCE_BLOCK_RE = re.compile(
+    r"^```[^\n]*\n.*?^```\s*$", re.MULTILINE | re.DOTALL
+)  # ```...```
+_MD_HR_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)        # ---
+_MD_BULLET_RE = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)  # - item / * item
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")         # [text](url)
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]+\)")       # ![alt](url)
+_MD_BLOCKQUOTE_RE = re.compile(r"^>\s?", re.MULTILINE)     # > quote
+
+
+def strip_markdown(text: str) -> str:
+    """Remove ALL Markdown formatting from text, returning clean plain text.
+
+    This is applied as a post-processing safety net on every LLM response
+    before the text is stored or rendered into a DOCX.  The function is
+    intentionally aggressive: it is better to lose a stray asterisk than
+    to leak Markdown syntax into a legal Word document.
+    """
+    if not text:
+        return text
+
+    # 1. Remove fenced code blocks entirely (keep inner text)
+    def _fence_inner(m: re.Match) -> str:
+        block = m.group(0)
+        # Strip opening and closing fences
+        lines = block.split("\n")
+        inner = []
+        inside = False
+        for line in lines:
+            if line.strip().startswith("```"):
+                inside = not inside
+                continue
+            if inside:
+                inner.append(line)
+        return "\n".join(inner)
+
+    text = _MD_FENCE_BLOCK_RE.sub(_fence_inner, text)
+    # Catch any remaining lone ``` lines
+    text = re.sub(r"^```[^\n]*$", "", text, flags=re.MULTILINE)
+
+    # 2. Remove horizontal rules
+    text = _MD_HR_RE.sub("", text)
+
+    # 3. Remove images (keep alt text)
+    text = _MD_IMAGE_RE.sub(r"\1", text)
+
+    # 4. Remove links (keep link text)
+    text = _MD_LINK_RE.sub(r"\1", text)
+
+    # 5. Remove blockquote markers
+    text = _MD_BLOCKQUOTE_RE.sub("", text)
+
+    # 6. Remove heading markers (keep text)
+    text = _MD_HEADING_RE.sub("", text)
+
+    # 7. Remove bold+italic (***text*** → text), must come before bold/italic
+    text = _MD_BOLD_ITALIC_RE.sub(r"\1", text)
+
+    # 8. Remove bold (**text** → text)
+    text = _MD_BOLD_RE.sub(r"\1", text)
+
+    # 9. Remove italic (*text* → text)
+    text = _MD_ITALIC_RE.sub(r"\1", text)
+
+    # 10. Remove inline code backticks (`code` → code)
+    text = _MD_INLINE_CODE_RE.sub(r"\1", text)
+
+    # 11. Convert bullet-list lines to flowing text
+    #     (replace "- item" / "* item" with just "item")
+    text = _MD_BULLET_RE.sub("", text)
+
+    # 12. Collapse excessive blank lines left behind
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
 # ── Base instructions (invariant) ─────────────────────────────────────── #
 
 _BASE_SYSTEM_INSTRUCTIONS = """\
@@ -118,13 +202,20 @@ Strict requirements:
   a rule explicitly requires it.
 - Do NOT introduce new legal obligations that are not present in the original.
 - Output ONLY the rewritten section text as PLAIN TEXT.
-- ABSOLUTELY NO MARKDOWN FORMATTING: do NOT use ** (bold), * (italic), \
-  ### (headings), ``` (code fences), --- (horizontal rules), or any other \
-  Markdown syntax. The output is inserted directly into a Word document, so \
-  any such characters will appear literally.
-- Do NOT output bullet lists with - or *. Write items as flowing sentences \
+- ABSOLUTELY NO MARKDOWN FORMATTING of any kind:
+  * Do NOT use ** or * for bold or italic.
+  * Do NOT use # or ## or ### for headings.
+  * Do NOT use ``` for code fences.
+  * Do NOT use --- for horizontal rules.
+  * Do NOT use > for blockquotes.
+  * Do NOT use [text](url) for links.
+  * Do NOT wrap anything in backticks.
+  The output is inserted directly into a Microsoft Word document. Any such \
+  characters will appear literally and corrupt the document.
+- Do NOT output bullet lists with -, *, or +. Write items as flowing sentences \
   or numbered clauses (1., 2., etc.).
-- No commentary, no preamble, no section labels.
+- No commentary, no preamble, no section labels, no introductory phrases.
+- Do NOT repeat the section heading or add any new headings.
 - If you cannot apply a rule without introducing legal risk, output the original text \
   unchanged and prefix your response with [NO-CHANGE].
 - Maintain the same structural level (heading/clause/definition/etc.) as the original.
@@ -195,7 +286,7 @@ class PromptEngine:
         applicable = rules
 
         rule_fragments = "\n".join(
-            f"[Rule {r['id']}] {r['instruction']}"
+            f"[Rule {r['id']}] {r.get('instruction') or r.get('prompt_fragment') or r.get('description', '')}"
             for r in applicable
         )
 
@@ -333,5 +424,8 @@ class PromptEngine:
 
         # Final safety net: strip trailing JSON metadata blocks
         clean_text = _strip_trailing_metadata(clean_text, audit)
+
+        # Final safety net: strip any residual Markdown syntax
+        clean_text = strip_markdown(clean_text)
 
         return clean_text, audit

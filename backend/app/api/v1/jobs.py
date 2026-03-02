@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
-from sqlalchemy import func, select, update
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
+from sqlalchemy import delete as sa_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, EditorUser, ReviewerUser, get_db
@@ -20,6 +20,7 @@ from app.core.errors import (
 )
 from app.db.models.document import Document, DocumentStatus, Section
 from app.db.models.job import JobStatus, RewriteJob, RewriteStatus, SectionRewrite
+from app.db.models.review import Review, ReviewStatus
 from app.db.models.ruleset import Ruleset
 from app.schemas.job import (
     CreateJobRequest,
@@ -29,7 +30,8 @@ from app.schemas.job import (
 )
 from app.services.assembly.docx_builder import AssemblyEngine
 from app.services.audit.logger import AuditLogger
-from app.services.llm.client import OllamaClient
+from app.services.llm.client import get_ollama_client
+from app.services.llm.orchestrator import request_cancellation
 
 _log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -91,7 +93,7 @@ async def create_job(
         )
 
     # Fail fast if LLM backend is offline/unhealthy
-    if not await OllamaClient().health_check():
+    if not await get_ollama_client().health_check():
         raise ServiceUnavailableError(
             ErrorCode.JOB_OLLAMA_UNAVAILABLE,
             "Ollama is unavailable. Start Ollama and ensure the configured model is pulled.",
@@ -257,8 +259,6 @@ async def assemble_job(
         )
 
     # ── Pre-flight: ensure every rewrite has an approved review ──────
-    from app.db.models.review import Review, ReviewStatus
-
     rewrite_result = await db.execute(
         select(SectionRewrite).where(SectionRewrite.job_id == job_id)
     )
@@ -305,6 +305,12 @@ async def assemble_job(
             except Exception as exc:
                 await session.rollback()
                 _log.error("assembly_failed", job_id=jid, error=str(exc))
+                # Persist error on the job in a fresh session
+                async with factory() as err_session:
+                    err_job = await err_session.get(RewriteJob, jid)
+                    if err_job:
+                        err_job.error_message = f"Assembly failed: {str(exc)[:500]}"
+                        await err_session.commit()
 
     background_tasks.add_task(_assemble, job_id, current_user.username)
     return {"message": "Assembly started. Download when ready via /documents/{id}/export"}
@@ -349,10 +355,18 @@ async def restart_job(
 
     job.status = JobStatus.PENDING
     job.error_message = None
-    # Reset completed count for sections being retried
-    job.completed_sections = 0
-    await db.commit()
 
+    # Count sections already completed (they are NOT re-queued) so that
+    # completed_sections accurately reflects actual progress after restart.
+    completed_count_result = await db.execute(
+        select(func.count()).where(
+            SectionRewrite.job_id == job_id,
+            SectionRewrite.status == RewriteStatus.COMPLETED,
+        )
+    )
+    job.completed_sections = completed_count_result.scalar_one()
+
+    # Audit and job-reset are part of the same transaction
     audit = AuditLogger(db)
     await audit.log(
         event_type="job.restarted",
@@ -362,7 +376,58 @@ async def restart_job(
         entity_id=job_id,
         payload={"restarted_by": current_user.username},
     )
+    await db.commit()
 
+    return RewriteJobOut.model_validate(job)
+
+
+@router.post(
+    "/{job_id}/cancel",
+    response_model=RewriteJobOut,
+    summary="Cancel a running or pending job",
+    dependencies=[EditorUser],
+)
+async def cancel_job(
+    job_id: str,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> RewriteJobOut:
+    """
+    Signal a running job to stop after its current section finishes.
+
+    If the job is PENDING (not yet picked up by the orchestrator), it is
+    immediately set to CANCELLED.  If it is RUNNING, the orchestrator
+    receives a cancellation signal and will stop between sections.
+    """
+    job = await db.get(RewriteJob, job_id)
+    if job is None:
+        raise NotFoundError("RewriteJob", job_id)
+
+    if job.status not in (JobStatus.PENDING, JobStatus.RUNNING):
+        raise ConflictError(
+            ErrorCode.VALIDATION_ERROR,
+            f"Cannot cancel a job with status '{job.status.value}'.",
+        )
+
+    if job.status == JobStatus.RUNNING:
+        # Signal the in-process orchestrator to break after current section
+        request_cancellation(job_id)
+
+    job.status = JobStatus.CANCELLED
+    job.error_message = "Job was stopped by user."
+
+    # Audit and status change in the same transaction
+    audit = AuditLogger(db)
+    await audit.log(
+        event_type="job.cancelled",
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        entity_type="RewriteJob",
+        entity_id=job_id,
+        payload={"cancelled_by": current_user.username},
+    )
+
+    _log.info("job_cancel_requested", job_id=job_id, user=current_user.username)
     return RewriteJobOut.model_validate(job)
 
 
@@ -418,3 +483,65 @@ async def debug_job(
             for r in rewrites
         ],
     }
+
+
+@router.delete(
+    "/{job_id}",
+    status_code=204,
+    summary="Delete a rewrite job and all associated data",
+    dependencies=[EditorUser],
+)
+async def delete_job(
+    job_id: str,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    """
+    Permanently delete a rewrite job, its section rewrites, risk findings,
+    reviews, and review comments.
+
+    Cannot delete a job that is currently running.
+    """
+    job = await db.get(RewriteJob, job_id)
+    if job is None:
+        raise NotFoundError("RewriteJob", job_id)
+
+    if job.status == JobStatus.RUNNING:
+        raise ConflictError(
+            ErrorCode.JOB_ALREADY_RUNNING,
+            "Cannot delete a running job. Wait for completion or cancel first.",
+        )
+
+    # Collect rewrite IDs for this job
+    rewrite_ids_result = await db.execute(
+        select(SectionRewrite.id).where(SectionRewrite.job_id == job_id)
+    )
+    rewrite_ids = list(rewrite_ids_result.scalars().all())
+
+    # Delete reviews first (FK on section_rewrites.id is RESTRICT, so must
+    # remove reviews before their parent rewrites can be deleted).
+    # ReviewComments cascade from Review via ondelete=CASCADE.
+    if rewrite_ids:
+        await db.execute(
+            sa_delete(Review).where(Review.rewrite_id.in_(rewrite_ids))
+        )
+
+    # Audit BEFORE delete so the event is part of the same transaction
+    audit = AuditLogger(db)
+    await audit.log(
+        event_type="job.deleted",
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        entity_type="RewriteJob",
+        entity_id=job_id,
+        payload={
+            "deleted_by": current_user.username,
+            "section_count": len(rewrite_ids),
+        },
+    )
+
+    # Delete the job — cascades to SectionRewrite → RiskFinding
+    await db.delete(job)
+
+    _log.info("job_deleted", job_id=job_id, user=current_user.username)
+    return Response(status_code=204)

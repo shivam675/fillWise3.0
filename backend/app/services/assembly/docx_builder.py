@@ -5,21 +5,17 @@ Rules:
   - Only sections with an APPROVED review are included.
   - If a review has edited_text, that takes precedence over the LLM output.
   - Sections without a rewrite (no job cover) use the original text.
-  - A manifest paragraph is appended at the end with metadata.
+  - Assembly metadata is stored in DOCX core properties (not visible in body).
   - The output DOCX is written to the export directory.
-  - Any residual Markdown formatting from the LLM is converted to proper
-    DOCX styles or stripped cleanly.
+  - Any residual Markdown formatting from the LLM is stripped before rendering.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 import structlog
 from docx import Document  # type: ignore[import-untyped]
 from docx.shared import Pt  # type: ignore[import-untyped]
@@ -27,132 +23,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import get_settings
-from app.core.errors import ConflictError, ErrorCode
+from app.core.errors import ConflictError, ErrorCode, NotFoundError
 from app.db.models.document import Section
 from app.db.models.job import JobStatus, RewriteJob, SectionRewrite
 from app.db.models.review import Review, ReviewStatus
-
-if TYPE_CHECKING:
-    pass
+from app.services.llm.prompt_engine import _strip_trailing_metadata, strip_markdown
 
 _log = structlog.get_logger(__name__)
-
-# ── Markdown → DOCX helpers ──────────────────────────────────────────── #
-
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)")          # ### Heading text
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")                # **bold**
-_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")  # *italic*
-_BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*")     # ***bold italic***
-_BULLET_RE = re.compile(r"^[-*]\s+(.*)")                # - item  or  * item
-_NUMBERED_RE = re.compile(r"^\d+\.\s+(.*)")             # 1. item
-_HR_RE = re.compile(r"^---+\s*$")                       # --- horizontal rule
-_FENCE_RE = re.compile(r"^```")                         # ``` code fence
-_INLINE_CODE_RE = re.compile(r"`([^`]+)`")              # `code`
-
-
-def _split_inline_runs(text: str) -> list[tuple[str, bool, bool]]:
-    """Split a line into (text, bold, italic) runs, resolving **bold** and *italic*.
-
-    Returns a list of (content, is_bold, is_italic) tuples.
-    """
-    runs: list[tuple[str, bool, bool]] = []
-    # Process bold-italic first, then bold, then italic
-    # Use a simple state machine approach via regex split
-
-    # Replace bold-italic → marker, then bold → marker, then italic → marker
-    # We'll walk the string with a combined pattern instead.
-    pattern = re.compile(r"(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*)")
-    last_end = 0
-    for m in pattern.finditer(text):
-        # Add preceding plain text
-        if m.start() > last_end:
-            runs.append((text[last_end : m.start()], False, False))
-        if m.group(2) is not None:  # ***bold italic***
-            runs.append((m.group(2), True, True))
-        elif m.group(3) is not None:  # **bold**
-            runs.append((m.group(3), True, False))
-        elif m.group(4) is not None:  # *italic*
-            runs.append((m.group(4), False, True))
-        last_end = m.end()
-    if last_end < len(text):
-        runs.append((text[last_end:], False, False))
-    return runs or [("", False, False)]
-
-
-def _add_rich_paragraph(doc: Document, text: str, style: str = "Normal") -> None:
-    """Add a paragraph with inline bold/italic runs properly formatted."""
-    # Strip inline code backticks first
-    text = _INLINE_CODE_RE.sub(r"\1", text)
-    runs = _split_inline_runs(text)
-    para = doc.add_paragraph(style=style)
-    for content, bold, italic in runs:
-        run = para.add_run(content)
-        if bold:
-            run.bold = True
-        if italic:
-            run.italic = True
-
-
-def _render_markdown_block(doc: Document, text: str) -> None:
-    """Convert a block of text (potentially with Markdown) into DOCX paragraphs.
-
-    Handles headings, bold/italic, bullet lists, numbered lists, horizontal
-    rules, and code fences.  Anything unrecognised is added as a plain paragraph.
-    """
-    lines = text.split("\n")
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        # Skip horizontal rules
-        if _HR_RE.match(line):
-            i += 1
-            continue
-
-        # Skip code fences (and the content between them)
-        if _FENCE_RE.match(line.strip()):
-            i += 1
-            # Skip until closing fence
-            while i < len(lines) and not _FENCE_RE.match(lines[i].strip()):
-                i += 1
-            if i < len(lines):
-                i += 1  # skip closing fence
-            continue
-
-        # Heading
-        hm = _HEADING_RE.match(line)
-        if hm:
-            level = min(len(hm.group(1)), 4)  # DOCX supports Heading 1-4 well
-            heading_text = hm.group(2).strip()
-            # Strip any bold markers inside headings
-            heading_text = heading_text.replace("**", "")
-            para = doc.add_paragraph(heading_text)
-            para.style = doc.styles[f"Heading {level}"]
-            i += 1
-            continue
-
-        # Bullet list item
-        bm = _BULLET_RE.match(line)
-        if bm:
-            _add_rich_paragraph(doc, bm.group(1), "List Bullet")
-            i += 1
-            continue
-
-        # Numbered list item
-        nm = _NUMBERED_RE.match(line)
-        if nm:
-            _add_rich_paragraph(doc, nm.group(1), "List Number")
-            i += 1
-            continue
-
-        # Blank line → skip (don't add empty paragraphs)
-        if not line.strip():
-            i += 1
-            continue
-
-        # Regular paragraph with potential inline formatting
-        _add_rich_paragraph(doc, line)
-        i += 1
 
 
 class AssemblyEngine:
@@ -180,7 +57,6 @@ class AssemblyEngine:
 
         job = await self._db.get(RewriteJob, job_id)
         if job is None:
-            from app.core.errors import NotFoundError
             raise NotFoundError("RewriteJob", job_id)
 
         if job.status != JobStatus.COMPLETED:
@@ -248,32 +124,35 @@ class AssemblyEngine:
 
             if section.heading and section.heading == section.original_text:
                 # It's a standalone heading — strip any residual markdown bold
-                clean_heading = text.replace("**", "").lstrip("# ").strip()
+                clean_heading = strip_markdown(text).strip()
                 para = doc.add_paragraph(clean_heading)
                 para.style = doc.styles["Heading 1"]
             else:
-                # Render with markdown → DOCX conversion
-                _render_markdown_block(doc, text)
+                # Strip any residual markdown, then add as plain paragraphs
+                clean_text = strip_markdown(text)
+                for line in clean_text.split("\n"):
+                    if line.strip():
+                        doc.add_paragraph(line)
 
-        # Manifest
-        doc.add_paragraph("")
-        manifest_para = doc.add_paragraph()
-        manifest_para.add_run("Document Assembly Manifest").bold = True
-        doc.add_paragraph(
-            json.dumps(
-                {
-                    "job_id": job_id,
-                    "assembled_by": requester_username,
-                    "assembled_at": datetime.now(UTC).isoformat(),
-                    "fillwise_version": "3.0.0",
-                },
-                indent=2,
-            )
+        # Store assembly metadata as DOCX core properties (not visible in body)
+        core_props = doc.core_properties
+        core_props.comments = json.dumps(
+            {
+                "job_id": job_id,
+                "assembled_by": requester_username,
+                "assembled_at": datetime.now(UTC).isoformat(),
+                "fillwise_version": "3.0.0",
+            }
         )
 
         # Write to export dir
         output_path = self._settings.export_dir / f"{job_id}_{uuid.uuid4().hex[:8]}.docx"
         doc.save(str(output_path))
+
+        # Persist the filename so the job record knows where its export lives
+        job.export_filename = output_path.name
+        await self._db.flush()
+
         log.info("assembly_complete", output_path=str(output_path))
         return output_path
 
@@ -300,8 +179,9 @@ class AssemblyEngine:
             return section.original_text
 
         # Safety net: strip any trailing LLM metadata that slipped through
-        from app.services.llm.prompt_engine import _strip_trailing_metadata
         text = _strip_trailing_metadata(text, {})
+        # Strip any residual markdown formatting
+        text = strip_markdown(text)
         return text
 
     def _set_default_styles(self, doc: Document) -> None:

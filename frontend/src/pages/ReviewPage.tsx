@@ -90,19 +90,30 @@ export default function ReviewPage() {
       // Optimistically update the review status 
       qc.setQueryData(["reviews", rewriteId], (old: any) => {
         if (!old) return old;
+        const statusMap: Record<string, string> = {
+          approve: "approved",
+          reject: "rejected",
+          edit: "edited",
+          request_rerun: "rerun_requested",
+        };
         return {
           ...old,
-          status: decision === "edit" ? "edited" : decision === "approve" ? "approved" : "rejected",
+          status: statusMap[decision] ?? "pending",
           reviewed_at: new Date().toISOString(),
         };
       });
       
       return { previousReview };
     },
-    onSuccess: () => {
+    onSuccess: (data, decision) => {
       // Refetch to get the authoritative state from server
       qc.invalidateQueries({ queryKey: ["reviews", rewriteId] });
       setActionError(null);
+      // After a rerun request, go to the job detail page so the user can
+      // reconnect the WebSocket and monitor the re-execution.
+      if (decision === "request_rerun" && data.job_id) {
+        navigate(`/jobs/${data.job_id}`);
+      }
     },
     onError: (err: any, _variables, context) => {
       // Rollback optimistic update on error

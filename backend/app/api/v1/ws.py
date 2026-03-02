@@ -11,7 +11,7 @@ import structlog
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from jose import JWTError
 
-from app.core.security import decode_token
+from app.core.security import verify_ws_ticket
 from app.db.session import get_session_factory
 from app.services.llm.orchestrator import RewriteOrchestrator
 
@@ -23,7 +23,7 @@ router = APIRouter(tags=["websocket"])
 async def job_stream(
     websocket: WebSocket,
     job_id: str,
-    token: str = Query(..., description="JWT access token"),
+    ticket: str = Query(..., description="Short-lived WS auth ticket"),
 ) -> None:
     """
     Stream rewrite job progress updates to connected clients.
@@ -36,11 +36,9 @@ async def job_stream(
     """
     # Authenticate before accepting
     try:
-        payload = decode_token(token)
-        if payload.get("type") != "access":
-            raise JWTError("Not an access token")
+        payload = verify_ws_ticket(ticket)
         user_id: str = payload["sub"]  # type: ignore[assignment]
-    except JWTError:
+    except (JWTError, KeyError):
         await websocket.close(code=4001, reason="Authentication failed")
         return
 
@@ -58,8 +56,9 @@ async def job_stream(
                     _log.info("ws_client_disconnected_during_job", job_id=job_id)
                     return
 
-            await websocket.send_json({"done": True, "job_id": job_id})
+            # Ensure final job status is persisted
             await db.commit()
+            await websocket.send_json({"done": True, "job_id": job_id})
 
     except WebSocketDisconnect:
         _log.info("ws_client_disconnected", job_id=job_id)

@@ -24,7 +24,7 @@ from app.core.errors import (
     ValidationError,
 )
 from app.db.models.document import Document, DocumentStatus, Section, SectionType
-from app.services.ingestion.docx_extractor import extract_docx
+from app.services.ingestion.docx_extractor import ExtractedParagraph, extract_docx
 from app.services.ingestion.pdf_extractor import extract_pdf
 from app.services.ingestion.structure_detector import StructuredSection, detect_structure
 
@@ -81,8 +81,13 @@ class DocumentProcessor:
                 page_count = None
                 paragraphs = content.paragraphs
 
-            # Enforce page limit (PDF only; DOCX approximated by paragraph count)
-            effective_pages = page_count or max(1, len(paragraphs) // 40)
+            # Enforce page limit
+            # PDF: exact page count; DOCX: estimate ~3000 chars per page (legal docs)
+            if page_count is not None:
+                effective_pages = page_count
+            else:
+                total_chars = sum(len(p.text) for p in paragraphs)
+                effective_pages = max(1, total_chars // 3000)
             if effective_pages > self._settings.max_document_pages:
                 raise ValidationError(
                     f"Document has {effective_pages} pages which exceeds the limit of "
@@ -108,15 +113,23 @@ class DocumentProcessor:
 
     def _pages_to_paragraphs(
         self, pages: list[tuple[int, str]]
-    ) -> list[FakeParagraph]:
-        """Convert PDF page tuples into objects compatible with detect_structure."""
-        paragraphs = []
+    ) -> list[ExtractedParagraph]:
+        """Convert PDF page tuples into ExtractedParagraph objects for detect_structure."""
+        paragraphs: list[ExtractedParagraph] = []
         idx = 0
         for _page_no, text in pages:
             for line in text.split("\n"):
                 line = line.strip()
                 if line:
-                    paragraphs.append(FakeParagraph(text=line, paragraph_index=idx))
+                    paragraphs.append(
+                        ExtractedParagraph(
+                            text=line,
+                            paragraph_index=idx,
+                            style_name="Normal",
+                            is_bold=False,
+                            is_italic=False,
+                        )
+                    )
                     idx += 1
         return paragraphs
 
@@ -158,14 +171,3 @@ class DocumentProcessor:
 
             if s.section_type == SectionType.HEADING:
                 current_heading_id = section.id
-
-
-class FakeParagraph:
-    """Adapter: wraps a plain text line as an ExtractedParagraph-like object."""
-
-    def __init__(self, text: str, paragraph_index: int) -> None:
-        self.text = text
-        self.paragraph_index = paragraph_index
-        self.style_name = "Normal"
-        self.is_bold = False
-        self.is_italic = False

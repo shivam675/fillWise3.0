@@ -9,10 +9,14 @@ Application lifecycle:
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -30,6 +34,9 @@ from app.core.middleware import (
 )
 
 _log = structlog.get_logger(__name__)
+
+# Resolved once at import time; absent in Docker (nginx serves the SPA instead).
+_FRONTEND_DIST = (Path(__file__).parent.parent.parent / "frontend" / "dist").resolve()
 
 
 def _create_limiter() -> Limiter:
@@ -62,6 +69,10 @@ async def _startup(app: FastAPI) -> None:
 
     # Seed roles and admin
     await _seed_database()
+
+    # Recover any jobs left as RUNNING from a previous crash/restart
+    await _recover_stale_jobs()
+
     _log.info("fillwise_ready", host=settings.host, port=settings.port)
 
 
@@ -111,6 +122,41 @@ async def _shutdown() -> None:
     _log.info("fillwise_shutdown")
 
 
+async def _recover_stale_jobs() -> None:
+    """Mark jobs stuck as RUNNING (from a previous crash) back to PENDING.
+
+    On a clean server start no orchestrator is processing, so any RUNNING
+    job is stale.  Reset them to PENDING so they can be restarted from
+    the UI, or set to CANCELLED if the user previously requested a stop.
+    """
+    from sqlalchemy import update
+
+    from app.db.models.job import JobStatus, RewriteJob
+    from app.db.session import get_session_factory
+
+    factory = get_session_factory()
+    async with factory() as db:
+        result = await db.execute(
+            update(RewriteJob)
+            .where(RewriteJob.status == JobStatus.RUNNING)
+            .values(
+                status=JobStatus.PENDING,
+                error_message="Server restarted while job was running. Click Restart to resume.",
+            )
+        )
+        if result.rowcount:  # type: ignore[union-attr]
+            _log.info("stale_jobs_recovered", count=result.rowcount)
+        await db.commit()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Modern lifespan handler replacing deprecated on_event hooks."""
+    await _startup(app)
+    yield
+    await _shutdown()
+
+
 def create_app() -> FastAPI:
     """Application factory. Returns a configured FastAPI instance."""
     settings = get_settings()
@@ -122,19 +168,14 @@ def create_app() -> FastAPI:
             "FillWise 3.0 — Local-First Legal Document Transformation Platform. "
             "All processing occurs on this machine; no data leaves the system."
         ),
+        lifespan=_lifespan,
         docs_url="/docs" if settings.environment.value != "production" else None,
         redoc_url="/redoc" if settings.environment.value != "production" else None,
         openapi_url="/openapi.json" if settings.environment.value != "production" else None,
     )
 
     # ── Startup / Shutdown ────────────────────────────────────────────── #
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        await _startup(app)
-
-    @app.on_event("shutdown")
-    async def on_shutdown() -> None:
-        await _shutdown()
+    # Handled by the lifespan context manager (see _lifespan below).
 
     # ── Rate Limiting ─────────────────────────────────────────────────── #
     limiter = _create_limiter()
@@ -170,7 +211,7 @@ def create_app() -> FastAPI:
         import sqlalchemy as sa
 
         from app.db.session import get_session_factory
-        from app.services.llm.client import OllamaClient
+        from app.services.llm.client import get_ollama_client
 
         db_ok = False
         try:
@@ -181,7 +222,7 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-        ollama_ok = await OllamaClient().health_check()
+        ollama_ok = await get_ollama_client().health_check()
 
         return {
             "status": "healthy" if (db_ok and ollama_ok) else "degraded",
@@ -197,6 +238,27 @@ def create_app() -> FastAPI:
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # ── SPA static files (React production build) ────────────────────── #
+    # Only activated when the frontend/dist folder exists (local dev / single-
+    # process mode).  In Docker the nginx container handles this instead.
+    if _FRONTEND_DIST.exists():
+        _assets_dir = _FRONTEND_DIST / "assets"
+
+        @app.get("/assets/{file_path:path}", include_in_schema=False)
+        async def _serve_asset(file_path: str) -> FileResponse:
+            """Serve Vite-hashed JS/CSS/font/image bundles."""
+            target = (_assets_dir / file_path).resolve()
+            # Directory-traversal guard
+            if not str(target).startswith(str(_assets_dir)):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404)
+            return FileResponse(str(target))
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def _spa_fallback(full_path: str) -> FileResponse:  # noqa: ARG001
+            """SPA catch-all: serve index.html for every non-API route."""
+            return FileResponse(str(_FRONTEND_DIST / "index.html"))
 
     return app
 

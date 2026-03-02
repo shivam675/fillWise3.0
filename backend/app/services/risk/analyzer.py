@@ -12,15 +12,11 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.job import RiskFinding, RiskSeverity, SectionRewrite
-
-if TYPE_CHECKING:
-    pass
 
 _log = structlog.get_logger(__name__)
 
@@ -33,36 +29,39 @@ _DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _PARTY_NAME_RE = re.compile(r'"([A-Z][a-zA-Z\s]+)"')
+_WORD_RE = re.compile(r"\b[a-z]+\b")
 
 
 def _tokenize(text: str) -> list[str]:
     """Simple word tokenizer: lowercase, strip punctuation."""
-    return re.findall(r"\b[a-z]+\b", text.lower())
+    return _WORD_RE.findall(text.lower())
 
 
-def _tfidf_similarity(a: str, b: str) -> float:
+def _cosine_similarity_from_counters(
+    counter_a: Counter[str], len_a: int,
+    counter_b: Counter[str], len_b: int,
+) -> float:
     """
-    Approximate cosine similarity using TF-IDF-weighted bag of words.
+    Cosine similarity using TF-weighted bag of words from pre-counted tokens.
 
     Returns a float in [0.0, 1.0] where 1.0 = identical.
     """
-    tokens_a = _tokenize(a)
-    tokens_b = _tokenize(b)
-
-    if not tokens_a or not tokens_b:
+    if len_a == 0 or len_b == 0:
         return 0.0
 
-    vocab = set(tokens_a) | set(tokens_b)
-    counter_a = Counter(tokens_a)
-    counter_b = Counter(tokens_b)
+    # Only iterate the smaller counter for dot product (sparse optimization)
+    if len(counter_a) > len(counter_b):
+        counter_a, counter_b = counter_b, counter_a
+        len_a, len_b = len_b, len_a
 
-    # Simple TF (no IDF in single-document context)
-    vec_a = {w: counter_a.get(w, 0) / len(tokens_a) for w in vocab}
-    vec_b = {w: counter_b.get(w, 0) / len(tokens_b) for w in vocab}
+    dot = 0.0
+    for w, count_a in counter_a.items():
+        count_b = counter_b.get(w, 0)
+        if count_b:
+            dot += (count_a / len_a) * (count_b / len_b)
 
-    dot = sum(vec_a[w] * vec_b[w] for w in vocab)
-    mag_a = math.sqrt(sum(v ** 2 for v in vec_a.values()))
-    mag_b = math.sqrt(sum(v ** 2 for v in vec_b.values()))
+    mag_a = math.sqrt(sum((c / len_a) ** 2 for c in counter_a.values()))
+    mag_b = math.sqrt(sum((c / len_b) ** 2 for c in counter_b.values()))
 
     if mag_a == 0 or mag_b == 0:
         return 0.0
@@ -175,7 +174,12 @@ class RiskAnalyzer:
     def _check_semantic_deviation(
         self, rewrite_id: str, original: str, rewritten: str
     ) -> list[RiskFinding]:
-        similarity = _tfidf_similarity(original, rewritten)
+        tokens_a = _tokenize(original)
+        tokens_b = _tokenize(rewritten)
+        similarity = _cosine_similarity_from_counters(
+            Counter(tokens_a), len(tokens_a),
+            Counter(tokens_b), len(tokens_b),
+        )
         deviation = 1.0 - similarity
 
         if deviation > 0.6:

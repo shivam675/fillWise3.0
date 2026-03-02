@@ -412,3 +412,17 @@ class OllamaClient:
         raise ServiceUnavailableError(  # unreachable, satisfies type checker
             ErrorCode.JOB_OLLAMA_UNAVAILABLE, "Exhausted retries"
         )
+
+
+# -- Singleton ----------------------------------------------------------- #
+
+_singleton: OllamaClient | None = None
+
+def get_ollama_client() -> OllamaClient:
+    """
+    Return a module-level OllamaClient singleton.
+    """
+    global _singleton  # noqa: PLW0603
+    if _singleton is None:
+        _singleton = OllamaClient()
+    return _singleton

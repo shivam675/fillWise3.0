@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Briefcase, Play, Eye } from "lucide-react";
+import { Briefcase, Play, Eye, Trash2, Square } from "lucide-react";
 import { jobsApi } from "@/api/jobs";
 import { documentsApi } from "@/api/documents";
 import { rulesetsApi } from "@/api/rulesets";
@@ -57,6 +57,27 @@ export default function JobsPage() {
       qc.invalidateQueries({ queryKey: ["jobs"] });
       setShowCreate(false);
       navigate(`/jobs/${job.id}`);
+    },
+    onError: (err) => setError(extractErrorMessage(err)),
+  });
+
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => jobsApi.delete(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      setDeleteConfirmId(null);
+    },
+    onError: (err) => {
+      setError(extractErrorMessage(err));
+      setDeleteConfirmId(null);
+    },
+  });
+
+  const cancelMut = useMutation({
+    mutationFn: (id: string) => jobsApi.cancel(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
     },
     onError: (err) => setError(extractErrorMessage(err)),
   });
@@ -193,17 +214,67 @@ export default function JobsPage() {
                     {formatDate(job.created_at)}
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      className="btn-ghost p-1"
-                      onClick={() => navigate(`/jobs/${job.id}`)}
-                    >
-                      <Eye className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="btn-ghost p-1"
+                        onClick={() => navigate(`/jobs/${job.id}`)}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      {(job.status === "running" || job.status === "pending") && (
+                        <button
+                          className="btn-ghost p-1 text-amber-500 hover:text-amber-700"
+                          onClick={() => cancelMut.mutate(job.id)}
+                          disabled={cancelMut.isPending}
+                          title="Stop job"
+                        >
+                          <Square className="h-4 w-4" />
+                        </button>
+                      )}
+                      {job.status !== "running" && job.status !== "pending" && (
+                        <button
+                          className="btn-ghost p-1 text-red-500 hover:text-red-700"
+                          onClick={() => setDeleteConfirmId(job.id)}
+                          title="Delete job"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Delete confirmation dialog */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="card w-full max-w-sm space-y-4">
+            <h2 className="font-semibold text-gray-900">Delete Job</h2>
+            <p className="text-sm text-gray-600">
+              This will permanently delete the job, all rewrites, risk findings,
+              reviews, and comments. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                className="btn-secondary"
+                onClick={() => setDeleteConfirmId(null)}
+                disabled={deleteMut.isPending}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary bg-red-600 hover:bg-red-700"
+                onClick={() => deleteMut.mutate(deleteConfirmId)}
+                disabled={deleteMut.isPending}
+              >
+                {deleteMut.isPending ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

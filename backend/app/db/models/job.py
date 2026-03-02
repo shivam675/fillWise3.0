@@ -82,6 +82,7 @@ class RewriteJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    export_filename: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     total_sections: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     completed_sections: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
