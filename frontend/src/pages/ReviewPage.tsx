@@ -105,13 +105,13 @@ export default function ReviewPage() {
       
       return { previousReview };
     },
-    onSuccess: (data, decision) => {
+    onSuccess: (data) => {
       // Refetch to get the authoritative state from server
       qc.invalidateQueries({ queryKey: ["reviews", rewriteId] });
       setActionError(null);
-      // After a rerun request, go to the job detail page so the user can
-      // reconnect the WebSocket and monitor the re-execution.
-      if (decision === "request_rerun" && data.job_id) {
+      // Immediately navigate back to the job detail page so the user can easily
+      // click the next pending review or monitor the re-execution stream.
+      if (data.job_id) {
         navigate(`/jobs/${data.job_id}`);
       }
     },

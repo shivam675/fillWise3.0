@@ -21,6 +21,7 @@ export default function JobsPage() {
     (location.state as { documentId?: string })?.documentId ?? ""
   );
   const [selectedRuleset, setSelectedRuleset] = useState("");
+  const [jobName, setJobName] = useState("");
 
   const { data: jobsData, isLoading } = useQuery({
     queryKey: ["jobs"],
@@ -52,7 +53,7 @@ export default function JobsPage() {
   );
 
   const createMut = useMutation({
-    mutationFn: () => jobsApi.create(selectedDoc, selectedRuleset),
+    mutationFn: () => jobsApi.create(selectedDoc, selectedRuleset, jobName),
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["jobs"] });
       setShowCreate(false);
@@ -106,6 +107,16 @@ export default function JobsPage() {
               {error}
             </div>
           )}
+          <div>
+            <label className="label">Job Name (Optional)</label>
+            <input
+              type="text"
+              className="input"
+              value={jobName}
+              onChange={(e) => setJobName(e.target.value)}
+              placeholder="e.g., Q3 Compliance Update"
+            />
+          </div>
           <div>
             <label className="label">Document (mapped)</label>
             <select
@@ -183,7 +194,7 @@ export default function JobsPage() {
           <table className="min-w-full divide-y divide-gray-100 text-sm">
             <thead className="bg-gray-50">
               <tr>
-                {["Job ID", "Status", "Sections", "Progress", "Created", ""].map(
+                {["Job", "Status", "Sections", "Progress", "Created", ""].map(
                   (h) => (
                     <th key={h} className="px-4 py-3 text-left font-medium text-gray-500">
                       {h}
@@ -195,8 +206,13 @@ export default function JobsPage() {
             <tbody className="divide-y divide-gray-50">
               {jobsData.items.map((job) => (
                 <tr key={job.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-400">
-                    {job.id.slice(0, 8)}
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col">
+                      <span className="font-medium text-gray-900">{job.name || "Untitled Job"}</span>
+                      <span className="font-mono text-xs text-gray-400">
+                        {job.id.slice(0, 8)}
+                      </span>
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={job.status} />

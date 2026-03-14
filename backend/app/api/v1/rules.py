@@ -10,7 +10,7 @@ import structlog
 import yaml
 from fastapi import APIRouter, Depends, Query, Request, UploadFile
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -19,6 +19,7 @@ from app.core.errors import ConflictError, ErrorCode, NotFoundError, ValidationE
 from app.db.models.ruleset import RuleConflict, Ruleset
 from app.schemas.ruleset import (
     ActivateRulesetResponse,
+    DeactivateRulesetResponse,
     CreateRulesetRequest,
     RuleConflictOut,
     RulesetListResponse,
@@ -321,3 +322,131 @@ async def activate_ruleset(
     return ActivateRulesetResponse(
         id=rs.id, is_active=True, message="Ruleset activated successfully."
     )
+
+
+@router.post(
+    "/{ruleset_id}/deactivate",
+    response_model=DeactivateRulesetResponse,
+    summary="Deactivate a ruleset",
+    dependencies=[AdminUser]
+)
+async def deactivate_ruleset(
+    ruleset_id: str,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DeactivateRulesetResponse:
+    """
+    Deactivate a ruleset to stop using it in future rewrite jobs.
+    """
+    rs = await db.get(Ruleset, ruleset_id)
+    if rs is None or rs.is_deleted:
+        raise NotFoundError("Ruleset", ruleset_id)
+
+    if not rs.is_active:
+        raise ConflictError(ErrorCode.RULE_ALREADY_ACTIVE, "Ruleset is not active.")
+
+    rs.is_active = False
+    audit = AuditLogger(db)
+    await audit.log(
+        event_type="ruleset.deactivated",
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        entity_type="Ruleset",
+        entity_id=rs.id,
+    )
+    await db.commit()
+
+    return DeactivateRulesetResponse(
+        id=rs.id, is_active=False, message="Ruleset deactivated successfully."
+    )
+
+
+@router.put(
+    "/{ruleset_id}",
+    response_model=RulesetOut,
+    summary="Update an inactive ruleset",
+    dependencies=[EditorUser],
+)
+async def update_ruleset(
+    ruleset_id: str,
+    body: CreateRulesetRequest,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> RulesetOut:
+    rs = await db.get(Ruleset, ruleset_id)
+    if rs is None or rs.is_deleted:
+        raise NotFoundError("Ruleset", ruleset_id)
+    if rs.is_active:
+        raise ConflictError(ErrorCode.RULE_ALREADY_ACTIVE, "Cannot edit an active ruleset.")
+
+    rules_list = [r.model_dump(exclude_none=True) for r in body.rules]
+    full_dict = {
+        "name": body.name,
+        "description": body.description,
+        "version": body.version,
+        "jurisdiction": body.jurisdiction,
+        "rules": rules_list,
+    }
+    content_hash = compute_rules_hash(full_dict)
+
+    rs.name = body.name
+    rs.description = body.description or ""
+    rs.jurisdiction = body.jurisdiction
+    rs.version = body.version
+    rs.rules_json = json.dumps(rules_list)
+    rs.content_hash = content_hash
+
+    # Delete old conflicts
+    await db.execute(delete(RuleConflict).where(RuleConflict.ruleset_id == ruleset_id))
+    
+    # Generate new conflicts
+    conflicts = detect_rule_conflicts(rules_list)
+    for c in conflicts:
+        db.add(
+            RuleConflict(
+                ruleset_id=rs.id,
+                rule_a_id=c["rule_a_id"],
+                rule_b_id=c["rule_b_id"],
+                description=c["description"],
+            )
+        )
+
+    audit = AuditLogger(db)
+    await audit.log(
+        event_type="ruleset.updated",
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        entity_type="Ruleset",
+        entity_id=rs.id,
+    )
+    await db.commit()
+    await db.refresh(rs)
+    return _to_ruleset_out(rs)
+
+
+@router.delete(
+    "/{ruleset_id}",
+    status_code=204,
+    summary="Delete a ruleset",
+    dependencies=[AdminUser],
+)
+async def delete_ruleset(
+    ruleset_id: str,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    rs = await db.get(Ruleset, ruleset_id)
+    if rs is None or rs.is_deleted:
+        raise NotFoundError("Ruleset", ruleset_id)
+
+    rs.soft_delete()
+    audit = AuditLogger(db)
+    await audit.log(
+        event_type="ruleset.deleted",
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        entity_type="Ruleset",
+        entity_id=rs.id,
+    )
+    await db.commit()
+    return None

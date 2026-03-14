@@ -71,3 +71,8 @@ class ActivateRulesetResponse(BaseModel):
     id: str
     is_active: bool
     message: str
+
+class DeactivateRulesetResponse(BaseModel):
+    id: str
+    is_active: bool
+    message: str

@@ -12,6 +12,7 @@ from app.db.models.job import JobStatus, RewriteStatus, RiskSeverity
 
 
 class CreateJobRequest(BaseModel):
+    name: str | None = Field(default=None, description="Optional name for the job")
     document_id: str = Field(..., description="Document to rewrite")
     ruleset_id: str = Field(..., description="Ruleset to apply")
     section_ids: list[str] | None = Field(
@@ -59,6 +60,7 @@ class SectionRewriteOut(BaseModel):
     tokens_completion: int
     duration_ms: int
     attempt_number: int
+    review_status: str | None = None
     risk_findings: list[RiskFindingOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -68,6 +70,7 @@ class SectionRewriteOut(BaseModel):
 
 class RewriteJobOut(BaseModel):
     id: str
+    name: str | None = None
     document_id: str
     ruleset_id: str
     status: JobStatus

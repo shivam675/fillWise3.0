@@ -23,6 +23,15 @@ export const rulesetsApi = {
       .then((r) => r.data);
   },
 
+  createJson: (data: Omit<RulesetOut, "id" | "content_hash" | "is_active" | "created_by" | "created_at" | "updated_at" | "schema_version"> & { rules: any[] }) =>
+    http.post<RulesetOut>("/rulesets", data).then((r) => r.data),
+
+  update: (id: string, data: Omit<RulesetOut, "id" | "content_hash" | "is_active" | "created_by" | "created_at" | "updated_at" | "schema_version"> & { rules: any[] }) =>
+    http.put<RulesetOut>(`/rulesets/${id}`, data).then((r) => r.data),
+
+  delete: (id: string) =>
+    http.delete(`/rulesets/${id}`).then((r) => r.data),
+
   conflicts: (id: string) =>
     http
       .get<RuleConflictOut[]>(`/rulesets/${id}/conflicts`)
@@ -30,4 +39,7 @@ export const rulesetsApi = {
 
   activate: (id: string) =>
     http.post(`/rulesets/${id}/activate`).then((r) => r.data),
+
+  deactivate: (id: string) =>
+    http.post(`/rulesets/${id}/deactivate`).then((r) => r.data),
 };

@@ -72,6 +72,7 @@ class RewriteJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[JobStatus] = mapped_column(
         SAEnum(JobStatus, name="job_status"),
         default=JobStatus.PENDING,

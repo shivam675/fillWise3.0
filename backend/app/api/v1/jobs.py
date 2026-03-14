@@ -124,6 +124,7 @@ async def create_job(
         raise ValidationError("No sections found to rewrite.", detail={})
 
     job = RewriteJob(
+        name=body.name,
         document_id=body.document_id,
         ruleset_id=body.ruleset_id,
         status=JobStatus.PENDING,
@@ -225,8 +226,11 @@ async def list_rewrites(
     rewrites = list(result.scalars().all())
     out = []
     for r in rewrites:
-        await db.refresh(r, ["risk_findings"])
-        out.append(SectionRewriteOut.model_validate(r))
+        await db.refresh(r, ["risk_findings", "review"])
+        model_out = SectionRewriteOut.model_validate(r)
+        if r.review:
+            model_out.review_status = r.review.status
+        out.append(model_out)
     return out
 
 

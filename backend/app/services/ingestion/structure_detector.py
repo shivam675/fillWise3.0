@@ -115,25 +115,35 @@ def detect_structure(paragraphs: list[ExtractedParagraph]) -> list[StructuredSec
 
         if sec_type == SectionType.HEADING:
             current_heading = para.text
-            sections.append(
-                StructuredSection(
-                    section_type=SectionType.HEADING,
-                    heading=para.text,
-                    text=para.text,
-                    paragraph_indices=[para.paragraph_index],
-                    depth=depth,
+            # We want to merge short headings into the next content block if possible,
+            # or merge them into the previous page block so we don't end up with 
+            # 1-line isolated heading sections in the UI.
+            if sections and len(sections[-1].text) < 3000:
+                sections[-1].text += "\n\n" + para.text
+                sections[-1].paragraph_indices.append(para.paragraph_index)
+            else:
+                sections.append(
+                    StructuredSection(
+                        section_type=SectionType.HEADING,
+                        heading=para.text,
+                        text=para.text,
+                        paragraph_indices=[para.paragraph_index],
+                        depth=depth,
+                    )
                 )
-            )
             continue
 
-        # Merge with previous section if same type and not a heading
+        # Merge with previous section if not a heading, up to ~3000 chars (approx 1 page)
+        # We allow mixing of LIST, DEFINITION, CLAUSE types to group by "pages" for easier HITL review.
         if (
             sections
-            and sections[-1].section_type == sec_type
-            and sec_type not in (SectionType.HEADING, SectionType.APPENDIX)
+            and (len(sections[-1].text) + len(para.text)) < 3000
         ):
-            sections[-1].text += "\n" + para.text
+            sections[-1].text += "\n\n" + para.text
             sections[-1].paragraph_indices.append(para.paragraph_index)
+            # If we merged a specific type into a clause, keep the general label as CLAUSE
+            if sections[-1].section_type != sec_type:
+                sections[-1].section_type = SectionType.CLAUSE
         else:
             sections.append(
                 StructuredSection(

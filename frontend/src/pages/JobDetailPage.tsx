@@ -132,7 +132,7 @@ export default function JobDetailPage() {
             currentSectionRef.current = update.section_id;
             setStreamLines((prev) => [
               ...prev,
-              `\n── Page ${(update.completed_sections || 0) + 1} of ${update.total_sections || "?"} ──`,
+              `\n── Section ${(update.completed_sections || 0) + 1} of ${update.total_sections || "?"} ──`,
               "",
             ]);
           }
@@ -186,7 +186,7 @@ export default function JobDetailPage() {
           </button>
           <div>
             <h1 className="text-xl font-bold text-gray-900">
-              Job <span className="font-mono text-base">{job.id.slice(0, 8)}</span>
+              {job.name || "Untitled Job"} <span className="font-mono text-base text-gray-400">({job.id.slice(0, 8)})</span>
             </h1>
             <p className="text-sm text-gray-400">Created {formatDate(job.created_at)}</p>
           </div>
@@ -253,7 +253,7 @@ export default function JobDetailPage() {
       <div className="card">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm font-medium text-gray-700">
-            {completed} / {total} pages
+            {completed} / {total} sections
           </span>
           <span className="text-sm text-gray-500">{pct}%</span>
         </div>
@@ -332,13 +332,18 @@ function RewriteRow({ rewrite }: { rewrite: SectionRewriteOut }) {
   const hasRisk = rewrite.risk_findings.some(
     (r) => r.severity === "critical" || r.severity === "high"
   );
+  
+  const isApproved = rewrite.review_status === "approved" || rewrite.review_status === "edited";
 
   return (
-    <div className="flex items-start gap-4 py-3 text-sm">
+    <div className={`flex items-start gap-4 py-3 px-3 rounded-md text-sm transition-colors ${
+      isApproved ? "bg-green-50/50 border border-green-200" : "hover:bg-gray-50"
+    }`}>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <StatusBadge status={rewrite.status} />
           {hasRisk && <span className="badge badge-red">Risk</span>}
+          {isApproved && <span className="badge bg-green-100 text-green-700">Approved</span>}
           <span className="text-xs text-gray-400">
             {rewrite.tokens_completion} tokens · {rewrite.duration_ms}ms
           </span>
@@ -349,10 +354,10 @@ function RewriteRow({ rewrite }: { rewrite: SectionRewriteOut }) {
       </div>
       {rewrite.status === "completed" && (
         <button
-          className="btn-secondary text-xs py-1 shrink-0"
+          className={`btn-secondary text-xs py-1 shrink-0 ${isApproved ? "!border-green-300 !text-green-700 hover:!bg-green-100" : ""}`}
           onClick={() => navigate(`/reviews/${rewrite.id}`)}
         >
-          Review
+          {isApproved ? "Approved ✓" : "Review"}
         </button>
       )}
     </div>

@@ -10,11 +10,12 @@ export const jobsApi = {
   get: (id: string) =>
     http.get<RewriteJobOut>(`/jobs/${id}`).then((r) => r.data),
 
-  create: (documentId: string, rulesetId: string) =>
+  create: (documentId: string, rulesetId: string, name?: string) =>
     http
       .post<RewriteJobOut>("/jobs", {
         document_id: documentId,
         ruleset_id: rulesetId,
+        name: name || undefined,
       })
       .then((r) => r.data),
 

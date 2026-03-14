@@ -152,6 +152,7 @@ export interface SectionRewriteOut {
   tokens_completion: number;
   duration_ms: number;
   attempt_number: number;
+  review_status?: string | null;
   risk_findings: RiskFindingOut[];
   created_at: string;
   updated_at: string;
@@ -159,6 +160,7 @@ export interface SectionRewriteOut {
 
 export interface RewriteJobOut {
   id: string;
+  name?: string | null;
   document_id: string;
   ruleset_id: string;
   status: JobStatus;

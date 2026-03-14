@@ -11,6 +11,7 @@ import LoginPage from "@/pages/LoginPage";
 import DocumentsPage from "@/pages/DocumentsPage";
 import DocumentDetailPage from "@/pages/DocumentDetailPage";
 import RulesetsPage from "@/pages/RulesetsPage";
+import RulesetCreatePage from "@/pages/RulesetCreatePage";
 import JobsPage from "@/pages/JobsPage";
 import JobDetailPage from "@/pages/JobDetailPage";
 import ReviewPage from "@/pages/ReviewPage";
@@ -44,6 +45,7 @@ export default function App() {
             <Route path="documents" element={<DocumentsPage />} />
             <Route path="documents/:id" element={<DocumentDetailPage />} />
             <Route path="rulesets" element={<RulesetsPage />} />
+            <Route path="rulesets/new" element={<RulesetCreatePage />} />
             <Route path="jobs" element={<JobsPage />} />
             <Route path="jobs/:id" element={<JobDetailPage />} />
             <Route path="reviews/:rewriteId" element={<ReviewPage />} />
